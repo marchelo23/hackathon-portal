@@ -95,7 +95,12 @@ class Room {
                 stolen_records: this.stolenRecords,
                 compromised_systems: this.infectedSystems
             },
-            emergency_funds: this.emergencyFunds
+            emergency_funds: this.emergencyFunds,
+            active_vote: this.activeVote ? {
+                action: this.activeVote.action,
+                approvals: Array.from(this.activeVote.approvals).length,
+                required: 2
+            } : null
         };
         const channel = portal.channel(`hospital-telemetry-${this.roomId}`);
         await channel.send({ content: payload });
@@ -188,6 +193,9 @@ class Room {
 }
 class GameServer {
     rooms = new Map();
+    lobbyChannel;
+    sosChannel;
+    voteChannel;
     start() {
         console.log("Starting Nocturnal StrixX Backend (Multi-Room Edition)...");
         this.startLobbyListener();
@@ -223,9 +231,9 @@ class GameServer {
         return this.rooms.get(roomId);
     }
     startLobbyListener() {
-        const lobbyChannel = portal.channel("lobby-system");
-        lobbyChannel.acquire();
-        lobbyChannel.on('message', (message) => {
+        this.lobbyChannel = portal.channel("lobby-system");
+        this.lobbyChannel.acquire();
+        this.lobbyChannel.on('message', (message) => {
             const data = message.content?.content || message.content;
             if (!data || !data.type)
                 return;
@@ -235,13 +243,11 @@ class GameServer {
                 const room = this.rooms.get(roomId);
                 const playerCount = room ? room.players.size : 0;
                 if (playerCount >= 3 && !room?.players.has(playerId)) {
-                    // Room full
                     portal.channel(`lobby-events-${playerId}`).send({
                         content: { type: 'join_rejected', reason: 'Room is full (max 3 players)' }
                     });
                 }
                 else {
-                    // Join success
                     const activeRoom = this.getOrCreateRoom(roomId);
                     activeRoom.players.set(playerId, {
                         id: playerId,
@@ -266,9 +272,9 @@ class GameServer {
         });
     }
     startSOSListener() {
-        const sosChannel = portal.channel("sos-requests");
-        sosChannel.acquire();
-        sosChannel.on('message', async (message) => {
+        this.sosChannel = portal.channel("sos-requests");
+        this.sosChannel.acquire();
+        this.sosChannel.on('message', async (message) => {
             const data = message.content?.content || message.content;
             if (!data || !data.roomId)
                 return;
@@ -313,9 +319,9 @@ class GameServer {
         });
     }
     startVoteListener() {
-        const actionsChannel = portal.channel("crisis-room-actions");
-        actionsChannel.acquire();
-        actionsChannel.on('message', (message) => {
+        this.voteChannel = portal.channel("crisis-room-actions");
+        this.voteChannel.acquire();
+        this.voteChannel.on('message', (message) => {
             const data = message.content?.content || message.content;
             if (!data || !data.roomId)
                 return;

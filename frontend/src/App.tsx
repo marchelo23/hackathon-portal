@@ -810,9 +810,11 @@ export default function App() {
     
     unsubscribe = listenerChannel.on('message', onMsg);
     
-    portal.channel('lobby-system').send({
-      content: { type: 'join_request', roomId: roomCode, name, role, playerId: name }
-    });
+    setTimeout(() => {
+      portal.channel('lobby-system').send({
+        content: { type: 'join_request', roomId: roomCode, name, role, playerId: name }
+      });
+    }, 500);
     
     timeoutId = setTimeout(() => {
       if (unsubscribe) unsubscribe();

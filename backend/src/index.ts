@@ -114,7 +114,12 @@ class Room {
         stolen_records: this.stolenRecords,
         compromised_systems: this.infectedSystems
       },
-      emergency_funds: this.emergencyFunds
+      emergency_funds: this.emergencyFunds,
+      active_vote: this.activeVote ? {
+        action: this.activeVote.action,
+        approvals: Array.from(this.activeVote.approvals).length,
+        required: 2
+      } : null
     };
     const channel = portal.channel(`hospital-telemetry-${this.roomId}`);
     await channel.send({ content: payload });
@@ -206,6 +211,9 @@ class Room {
 
 class GameServer {
   rooms: Map<string, Room> = new Map();
+  lobbyChannel: any;
+  sosChannel: any;
+  voteChannel: any;
 
   start() {
     console.log("Starting Nocturnal StrixX Backend (Multi-Room Edition)...");
@@ -241,6 +249,90 @@ class GameServer {
       console.log(`[Server] Creating new room: ${roomId}`);
       const newRoom = new Room(roomId);
       this.rooms.set(roomId, newRoom);
+      
+      const roomActionsChannel = portal.channel(`crisis-room-actions-${roomId}`);
+      roomActionsChannel.acquire();
+
+      roomActionsChannel.on('message', (message: any) => {
+        const data = message.content?.content || message.content;
+        if (!data) return;
+        
+        const room = this.rooms.get(roomId);
+        if (!room || data.session_id !== room.gameSessionId) return; 
+
+        const senderId = message.senderId || data.sender;
+
+        if (data.type === 'vote_started') {
+          if (room.activeVote) return;
+          
+          console.log(`[Room ${room.roomId}] Vote started for ${data.action} by ${senderId}`);
+          
+          if (data.isSoloPlayer) {
+            room.executeAction(data.action);
+            roomActionsChannel.send({ 
+              content: { 
+                type: 'vote_result', 
+                action: data.action, 
+                passed: true,
+                votes: 1,
+                session_id: room.gameSessionId,
+                roomId: room.roomId
+              } 
+            });
+            return;
+          }
+
+          room.activeVote = {
+            action: data.action,
+            approvals: new Set([senderId]),
+            timeout: setTimeout(() => {
+              if (room.activeVote) {
+                const passed = room.activeVote.approvals.size >= 2;
+                
+                if (passed) {
+                  room.executeAction(room.activeVote.action);
+                }
+                
+                roomActionsChannel.send({ 
+                  content: { 
+                    type: 'vote_result', 
+                    action: room.activeVote.action, 
+                    passed,
+                    votes: room.activeVote.approvals.size,
+                    roomId: room.roomId
+                  } 
+                });
+                
+                room.activeVote = null;
+              }
+            }, 10000)
+          };
+          
+          // Notify others in room that vote started
+          roomActionsChannel.send({ 
+            content: { 
+              type: 'vote_started_sync', 
+              action: data.action, 
+              sender: senderId,
+              isSoloPlayer: false,
+              roomId: room.roomId 
+            } 
+          });
+          
+        } else if (data.type === 'vote_cast' && room.activeVote && room.activeVote.action === data.action) {
+          if (data.vote === 'approve') {
+            room.activeVote.approvals.add(senderId);
+            roomActionsChannel.send({
+              content: {
+                type: 'vote_cast_sync',
+                action: data.action,
+                roomId: room.roomId
+              }
+            });
+          }
+        }
+      });
+
       // Run initial tick
       newRoom.simulateTick();
     }
@@ -248,10 +340,10 @@ class GameServer {
   }
 
   startLobbyListener() {
-    const lobbyChannel = portal.channel("lobby-system");
-    lobbyChannel.acquire();
+    this.lobbyChannel = portal.channel("lobby-system");
+    this.lobbyChannel.acquire();
 
-    lobbyChannel.on('message', (message: any) => {
+    this.lobbyChannel.on('message', (message: any) => {
       const data = message.content?.content || message.content;
       if (!data || !data.type) return;
 
@@ -263,12 +355,10 @@ class GameServer {
         const playerCount = room ? room.players.size : 0;
         
         if (playerCount >= 3 && !room?.players.has(playerId)) {
-          // Room full
           portal.channel(`lobby-events-${playerId}`).send({
             content: { type: 'join_rejected', reason: 'Room is full (max 3 players)' }
           });
         } else {
-          // Join success
           const activeRoom = this.getOrCreateRoom(roomId);
           activeRoom.players.set(playerId, {
             id: playerId,
@@ -294,10 +384,10 @@ class GameServer {
   }
 
   startSOSListener() {
-    const sosChannel = portal.channel("sos-requests");
-    sosChannel.acquire();
+    this.sosChannel = portal.channel("sos-requests");
+    this.sosChannel.acquire();
 
-    sosChannel.on('message', async (message: any) => {
+    this.sosChannel.on('message', async (message: any) => {
       const data = message.content?.content || message.content;
       if (!data || !data.roomId) return;
 
@@ -342,92 +432,6 @@ class GameServer {
         });
       } catch (error) {
         console.error(`[Room ${room.roomId}] Error generating analyst advice:`, error);
-      }
-    });
-  }
-
-  startVoteListener() {
-    const actionsChannel = portal.channel("crisis-room-actions");
-    actionsChannel.acquire();
-
-    actionsChannel.on('message', (message: any) => {
-      const data = message.content?.content || message.content;
-      if (!data || !data.roomId) return;
-      
-      const room = this.rooms.get(data.roomId);
-      if (!room || data.session_id !== room.gameSessionId) return; 
-
-      const senderId = message.senderId || data.sender;
-      const roomActionsChannel = portal.channel(`crisis-room-actions-${room.roomId}`);
-
-      if (data.type === 'vote_started') {
-        if (room.activeVote) return;
-        
-        console.log(`[Room ${room.roomId}] Vote started for ${data.action} by ${senderId}`);
-        
-        if (data.isSoloPlayer) {
-          room.executeAction(data.action);
-          roomActionsChannel.send({ 
-            content: { 
-              type: 'vote_result', 
-              action: data.action, 
-              passed: true,
-              votes: 1,
-              session_id: room.gameSessionId,
-              roomId: room.roomId
-            } 
-          });
-          return;
-        }
-
-        room.activeVote = {
-          action: data.action,
-          approvals: new Set([senderId]),
-          timeout: setTimeout(() => {
-            if (room.activeVote) {
-              const passed = room.activeVote.approvals.size >= 2;
-              
-              if (passed) {
-                room.executeAction(room.activeVote.action);
-              }
-              
-              roomActionsChannel.send({ 
-                content: { 
-                  type: 'vote_result', 
-                  action: room.activeVote.action, 
-                  passed,
-                  votes: room.activeVote.approvals.size,
-                  roomId: room.roomId
-                } 
-              });
-              
-              room.activeVote = null;
-            }
-          }, 10000)
-        };
-        
-        // Notify others in room that vote started
-        roomActionsChannel.send({ 
-          content: { 
-            type: 'vote_started_sync', 
-            action: data.action, 
-            sender: senderId,
-            isSoloPlayer: false,
-            roomId: room.roomId 
-          } 
-        });
-        
-      } else if (data.type === 'vote_cast' && room.activeVote && room.activeVote.action === data.action) {
-        if (data.vote === 'approve') {
-          room.activeVote.approvals.add(senderId);
-          roomActionsChannel.send({
-            content: {
-              type: 'vote_cast_sync',
-              action: data.action,
-              roomId: room.roomId
-            }
-          });
-        }
       }
     });
   }

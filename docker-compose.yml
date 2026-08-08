@@ -19,5 +19,5 @@ services:
       args:
         - VITE_PORTAL_API_KEY=${portal_api}
     ports:
-      - "80:80"
+      - "8081:80"
     restart: unless-stopped
