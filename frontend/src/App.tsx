@@ -163,8 +163,14 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
   const canInteractNeg = isGodMode || userRole === 'Negotiator';
 
   // Mouse tracking for cursors
+  // Mouse tracking for cursors (Throttled to avoid 429 Too Many Requests)
   useEffect(() => {
+    let lastTime = 0;
     const handleMouseMove = (e: MouseEvent) => {
+      const now = Date.now();
+      if (now - lastTime < 250) return; // Throttle to 4 FPS to be safe with Portal's rate limit
+      lastTime = now;
+      
       sendCursor({
         content: {
           id: userName,
@@ -173,7 +179,7 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
           x: e.clientX,
           y: e.clientY
         }
-      });
+      }).catch(() => { /* ignore rate limit errors silently */ });
     };
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
