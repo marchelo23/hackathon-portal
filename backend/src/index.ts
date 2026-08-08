@@ -220,7 +220,6 @@ class GameServer {
     
     this.startLobbyListener();
     this.startSOSListener();
-    this.startVoteListener();
     
     // Main Game Loop across all active rooms
     setInterval(() => {

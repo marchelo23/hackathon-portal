@@ -200,7 +200,6 @@ class GameServer {
         console.log("Starting Nocturnal StrixX Backend (Multi-Room Edition)...");
         this.startLobbyListener();
         this.startSOSListener();
-        this.startVoteListener();
         // Main Game Loop across all active rooms
         setInterval(() => {
             const now = Date.now();
@@ -225,6 +224,80 @@ class GameServer {
             console.log(`[Server] Creating new room: ${roomId}`);
             const newRoom = new Room(roomId);
             this.rooms.set(roomId, newRoom);
+            const roomActionsChannel = portal.channel(`crisis-room-actions-${roomId}`);
+            roomActionsChannel.acquire();
+            roomActionsChannel.on('message', (message) => {
+                const data = message.content?.content || message.content;
+                if (!data)
+                    return;
+                const room = this.rooms.get(roomId);
+                if (!room || data.session_id !== room.gameSessionId)
+                    return;
+                const senderId = message.senderId || data.sender;
+                if (data.type === 'vote_started') {
+                    if (room.activeVote)
+                        return;
+                    console.log(`[Room ${room.roomId}] Vote started for ${data.action} by ${senderId}`);
+                    if (data.isSoloPlayer) {
+                        room.executeAction(data.action);
+                        roomActionsChannel.send({
+                            content: {
+                                type: 'vote_result',
+                                action: data.action,
+                                passed: true,
+                                votes: 1,
+                                session_id: room.gameSessionId,
+                                roomId: room.roomId
+                            }
+                        });
+                        return;
+                    }
+                    room.activeVote = {
+                        action: data.action,
+                        approvals: new Set([senderId]),
+                        timeout: setTimeout(() => {
+                            if (room.activeVote) {
+                                const passed = room.activeVote.approvals.size >= 2;
+                                if (passed) {
+                                    room.executeAction(room.activeVote.action);
+                                }
+                                roomActionsChannel.send({
+                                    content: {
+                                        type: 'vote_result',
+                                        action: room.activeVote.action,
+                                        passed,
+                                        votes: room.activeVote.approvals.size,
+                                        roomId: room.roomId
+                                    }
+                                });
+                                room.activeVote = null;
+                            }
+                        }, 10000)
+                    };
+                    // Notify others in room that vote started
+                    roomActionsChannel.send({
+                        content: {
+                            type: 'vote_started_sync',
+                            action: data.action,
+                            sender: senderId,
+                            isSoloPlayer: false,
+                            roomId: room.roomId
+                        }
+                    });
+                }
+                else if (data.type === 'vote_cast' && room.activeVote && room.activeVote.action === data.action) {
+                    if (data.vote === 'approve') {
+                        room.activeVote.approvals.add(senderId);
+                        roomActionsChannel.send({
+                            content: {
+                                type: 'vote_cast_sync',
+                                action: data.action,
+                                roomId: room.roomId
+                            }
+                        });
+                    }
+                }
+            });
             // Run initial tick
             newRoom.simulateTick();
         }
@@ -315,83 +388,6 @@ class GameServer {
             }
             catch (error) {
                 console.error(`[Room ${room.roomId}] Error generating analyst advice:`, error);
-            }
-        });
-    }
-    startVoteListener() {
-        this.voteChannel = portal.channel("crisis-room-actions");
-        this.voteChannel.acquire();
-        this.voteChannel.on('message', (message) => {
-            const data = message.content?.content || message.content;
-            if (!data || !data.roomId)
-                return;
-            const room = this.rooms.get(data.roomId);
-            if (!room || data.session_id !== room.gameSessionId)
-                return;
-            const senderId = message.senderId || data.sender;
-            const roomActionsChannel = portal.channel(`crisis-room-actions-${room.roomId}`);
-            if (data.type === 'vote_started') {
-                if (room.activeVote)
-                    return;
-                console.log(`[Room ${room.roomId}] Vote started for ${data.action} by ${senderId}`);
-                if (data.isSoloPlayer) {
-                    room.executeAction(data.action);
-                    roomActionsChannel.send({
-                        content: {
-                            type: 'vote_result',
-                            action: data.action,
-                            passed: true,
-                            votes: 1,
-                            session_id: room.gameSessionId,
-                            roomId: room.roomId
-                        }
-                    });
-                    return;
-                }
-                room.activeVote = {
-                    action: data.action,
-                    approvals: new Set([senderId]),
-                    timeout: setTimeout(() => {
-                        if (room.activeVote) {
-                            const passed = room.activeVote.approvals.size >= 2;
-                            if (passed) {
-                                room.executeAction(room.activeVote.action);
-                            }
-                            roomActionsChannel.send({
-                                content: {
-                                    type: 'vote_result',
-                                    action: room.activeVote.action,
-                                    passed,
-                                    votes: room.activeVote.approvals.size,
-                                    roomId: room.roomId
-                                }
-                            });
-                            room.activeVote = null;
-                        }
-                    }, 10000)
-                };
-                // Notify others in room that vote started
-                roomActionsChannel.send({
-                    content: {
-                        type: 'vote_started_sync',
-                        action: data.action,
-                        sender: senderId,
-                        isSoloPlayer: false,
-                        roomId: room.roomId
-                    }
-                });
-            }
-            else if (data.type === 'vote_cast' && room.activeVote && room.activeVote.action === data.action) {
-                if (data.vote === 'approve') {
-                    room.activeVote.approvals.add(senderId);
-                    roomActionsChannel.send({
-                        content: {
-                            type: 'vote_cast_sync',
-                            action: data.action,
-                            roomId: room.roomId
-                        }
-                    });
-                }
             }
         });
     }
