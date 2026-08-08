@@ -77,8 +77,9 @@ const Typewriter = ({ text, delay = 15 }: { text: string; delay?: number }) => {
 
 // -- COMPONENTS --
 
-function LoginLobby({ onJoin }: { onJoin: (name: string, role: Role) => void }) {
+function LoginLobby({ onJoin, joinError }: { onJoin: (name: string, role: Role, roomCode: string) => void, joinError: string | null }) {
   const [name, setName] = useState('');
+  const [roomCode, setRoomCode] = useState('');
   
   return (
     <div className="min-h-screen bg-[#050b14] flex flex-col items-center justify-center p-4 font-['Inter',sans-serif] text-slate-200">
@@ -94,6 +95,23 @@ function LoginLobby({ onJoin }: { onJoin: (name: string, role: Role) => void }) 
         </div>
 
         <div className="flex flex-col gap-6">
+          {joinError && (
+            <div className="bg-red-500/20 border border-red-500 text-red-300 p-3 rounded-lg text-sm font-bold text-center">
+              {joinError}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Room Code</label>
+            <input 
+              type="text" 
+              value={roomCode}
+              onChange={e => setRoomCode(e.target.value.toUpperCase())}
+              className="w-full bg-slate-900/50 border border-slate-700 rounded-lg p-3 text-white focus:border-blue-500 outline-none transition-colors font-bold tracking-widest uppercase"
+              placeholder="E.g. SALA1"
+            />
+          </div>
+
           <div>
             <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Agent Name</label>
             <input 
@@ -109,24 +127,24 @@ function LoginLobby({ onJoin }: { onJoin: (name: string, role: Role) => void }) 
             <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Select Role</label>
             <div className="flex flex-col gap-3">
               <button 
-                disabled={!name}
-                onClick={() => onJoin(name, 'Negotiator')}
+                disabled={!name || !roomCode}
+                onClick={() => onJoin(name, 'Negotiator', roomCode)}
                 className="bg-slate-800 hover:bg-blue-900/50 border border-slate-700 hover:border-blue-500 p-3 rounded-lg text-left transition-all disabled:opacity-50"
               >
                 <span className="font-bold text-blue-400">Negotiator</span>
                 <p className="text-xs text-slate-400">Communication with Hostile Intelligence and Advisors.</p>
               </button>
               <button 
-                disabled={!name}
-                onClick={() => onJoin(name, 'IT Architect')}
+                disabled={!name || !roomCode}
+                onClick={() => onJoin(name, 'IT Architect', roomCode)}
                 className="bg-slate-800 hover:bg-orange-900/50 border border-slate-700 hover:border-orange-500 p-3 rounded-lg text-left transition-all disabled:opacity-50"
               >
                 <span className="font-bold text-orange-400">IT Architect</span>
                 <p className="text-xs text-slate-400">Infrastructure control and network countermeasures.</p>
               </button>
               <button 
-                disabled={!name}
-                onClick={() => onJoin(name, 'CFO')}
+                disabled={!name || !roomCode}
+                onClick={() => onJoin(name, 'CFO', roomCode)}
                 className="bg-slate-800 hover:bg-emerald-900/50 border border-slate-700 hover:border-emerald-500 p-3 rounded-lg text-left transition-all disabled:opacity-50"
               >
                 <span className="font-bold text-emerald-400">CFO (Finance)</span>
@@ -137,7 +155,7 @@ function LoginLobby({ onJoin }: { onJoin: (name: string, role: Role) => void }) 
 
           <div className="pt-4 border-t border-slate-800">
             <button 
-              onClick={() => onJoin(name || 'Solo Player', 'God Mode')}
+              onClick={() => onJoin(name || 'Solo Player', 'God Mode', roomCode || 'SOLO')}
               className="w-full bg-red-900/20 hover:bg-red-900/40 border border-red-500/50 p-3 rounded-lg text-center transition-all"
             >
               <span className="font-bold text-red-400 tracking-wider uppercase text-sm">God Mode (Solo Player)</span>
@@ -149,15 +167,15 @@ function LoginLobby({ onJoin }: { onJoin: (name: string, role: Role) => void }) 
   );
 }
 
-function Dashboard({ userName, userRole }: { userName: string, userRole: Role }) {
-  const { messages: telemetryMessages } = useChannel<{ content: StrixxEvent }>({ channelId: 'hospital-telemetry' });
-  const { messages: advisoryMessages } = useChannel<{ content: AdvisoryMessage }>({ channelId: 'internal-advisory' });
+function Dashboard({ userName, userRole, roomId }: { userName: string, userRole: Role, roomId: string }) {
+  const { messages: telemetryMessages } = useChannel<{ content: StrixxEvent }>({ channelId: `hospital-telemetry-${roomId}` });
+  const { messages: advisoryMessages } = useChannel<{ content: AdvisoryMessage }>({ channelId: `internal-advisory-${roomId}` });
   
   // Actions & Votes Channel
-  const { messages: actionMessages, send: sendAction } = useChannel<any>({ channelId: 'crisis-room-actions' });
+  const { messages: actionMessages, send: sendAction } = useChannel<any>({ channelId: `crisis-room-actions-${roomId}` });
   
   // Cursors Channel
-  const { messages: cursorMessages, send: sendCursor } = useChannel<any>({ channelId: 'crisis-room-cursors' });
+  const { messages: cursorMessages, send: sendCursor } = useChannel<any>({ channelId: `crisis-room-cursors-${roomId}` });
 
   const [events, setEvents] = useState<StrixxEvent[]>([]);
   const [advisories, setAdvisories] = useState<AdvisoryMessage[]>([]);
@@ -174,7 +192,6 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
   const canInteractNeg = isGodMode || userRole === 'Negotiator';
 
   // Mouse tracking for cursors
-  // Mouse tracking for cursors (Throttled to avoid 429 Too Many Requests)
   useEffect(() => {
     let lastTime = 0;
     const handleMouseMove = (e: MouseEvent) => {
@@ -195,6 +212,16 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [userName, userRole, sendCursor]);
+
+  // Heartbeat to keep slot active in lobby
+  useEffect(() => {
+    const interval = setInterval(() => {
+      portal.channel('lobby-system').send({
+        content: { type: 'heartbeat', roomId, playerId: userName }
+      }).catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [roomId, userName]);
 
   useEffect(() => {
     if (cursorMessages.length > 0) {
@@ -447,6 +474,10 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
           </div>
           
           <div className="bg-slate-900/80 border border-slate-700 px-4 py-2 rounded-full flex items-center gap-3">
+            <div className="text-xs">
+              <span className="text-slate-400">Room:</span> <span className="font-bold text-emerald-400">{roomId}</span>
+            </div>
+            <div className="w-px h-4 bg-slate-700"></div>
             <Users className="w-4 h-4 text-blue-400" />
             <div className="text-xs">
               <span className="text-slate-400">Agent:</span> <span className="font-bold text-white">{userName}</span>
@@ -746,15 +777,67 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
 }
 
 export default function App() {
-  const [user, setUser] = useState<{name: string, role: Role} | null>(null);
+  const [user, setUser] = useState<{name: string, role: Role, roomId: string} | null>(null);
+  const [isJoining, setIsJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+
+  const handleJoinRequest = (name: string, role: Role, roomCode: string) => {
+    setIsJoining(true);
+    setJoinError(null);
+    
+    const listenerChannel = portal.channel(`lobby-events-${name}`);
+    listenerChannel.acquire();
+    
+    let timeoutId: any;
+    
+    const onMsg = (msg: any) => {
+      const data = msg.content?.content || msg.content;
+      if (data?.type === 'join_accepted' && data.roomId === roomCode) {
+        clearTimeout(timeoutId);
+        listenerChannel.removeListener('message', onMsg);
+        listenerChannel.release();
+        setUser({ name, role, roomId: roomCode });
+        setIsJoining(false);
+      } else if (data?.type === 'join_rejected') {
+        clearTimeout(timeoutId);
+        listenerChannel.removeListener('message', onMsg);
+        listenerChannel.release();
+        setJoinError(data.reason || 'Join rejected');
+        setIsJoining(false);
+      }
+    };
+    
+    listenerChannel.on('message', onMsg);
+    
+    portal.channel('lobby-system').send({
+      content: { type: 'join_request', roomId: roomCode, name, role, playerId: name }
+    });
+    
+    timeoutId = setTimeout(() => {
+      listenerChannel.removeListener('message', onMsg);
+      listenerChannel.release();
+      setJoinError("Connection timeout. Is the server running?");
+      setIsJoining(false);
+    }, 5000);
+  };
 
   if (!user) {
-    return <LoginLobby onJoin={(name, role) => setUser({ name, role })} />;
+    if (isJoining) {
+      return (
+        <div className="min-h-screen bg-[#050b14] flex flex-col items-center justify-center p-4 font-['Inter',sans-serif] text-slate-200">
+           <div className="animate-pulse flex flex-col items-center">
+             <ShieldAlert className="w-16 h-16 text-blue-500 mb-4" />
+             <h2 className="text-xl font-bold uppercase tracking-widest text-blue-400 font-['Orbitron',sans-serif]">Requesting Access...</h2>
+           </div>
+        </div>
+      );
+    }
+    return <LoginLobby onJoin={handleJoinRequest} joinError={joinError} />;
   }
 
   return (
     <PortalProvider client={portal}>
-      <Dashboard userName={user.name} userRole={user.role} />
+      <Dashboard userName={user.name} userRole={user.role} roomId={user.roomId} />
     </PortalProvider>
   );
 }

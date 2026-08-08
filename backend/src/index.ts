@@ -17,40 +17,7 @@ if (!PORTAL_API_KEY || !OPENAI_API_KEY) {
 const portal = new Portal({ apiKey: PORTAL_API_KEY });
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
-// Global state for simulation
-let exfiltrationProgress = 0;
-let stolenRecords = 0;
-let infectedSystems = 0;
-let emergencyFunds = 250000;
-let isDatabaseDisconnected = false;
-let isICUOffline = false;
-
-let patientSafety = 100;
-let counterVirusProgress = 0;
-let isDeployingVirus = false;
-let gameStatus: 'PLAYING' | 'WON' | 'LOST' = 'PLAYING';
-let gameSessionId = Date.now().toString();
-let sosUses = 0;
-let isFirstTick = true;
-
-function resetGame() {
-  exfiltrationProgress = 0;
-  stolenRecords = 0;
-  infectedSystems = 0;
-  emergencyFunds = 250000;
-  isDatabaseDisconnected = false;
-  isICUOffline = false;
-  patientSafety = 100;
-  counterVirusProgress = 0;
-  isDeployingVirus = false;
-  gameStatus = 'PLAYING';
-  gameSessionId = Date.now().toString();
-  sosUses = 0;
-  isFirstTick = true;
-  activeVote = null;
-}
-
-const getAttackerInstruction = () => `YOU ARE THE RANSOMWARE "NOCTURNAL STRIXX". You are attacking a hospital network. NO PROSE.
+const getAttackerInstruction = (isDatabaseDisconnected: boolean, isICUOffline: boolean) => `YOU ARE THE RANSOMWARE "NOCTURNAL STRIXX". You are attacking a hospital network. NO PROSE.
 You can only generate telemetry events and technical console logs.
 
 Current system context:
@@ -77,251 +44,394 @@ Example 2: 'Patient safety is dropping dangerously low! You must press [Reconnec
 Example 3: 'We are buying time, Negotiator please use [Stall Attackers] or CFO use [Pay Ransom] to delay the exfiltration while the Counter-Virus compiles.'
 Do not generate Markdown, just plain text. Keep it under 4 sentences.`;
 
-let lastPartialPayload: any = {
-  attack_phase: "Initial Breach",
-  attacker_terminal: { host_user: "strixx@c2:~#", executed_command: "ping", console_output: "Alive" },
-  server_status: "Critical"
-};
-
-async function broadcastTelemetry() {
-  const payload = {
-    ...lastPartialPayload,
-    exfiltration_progress: Math.floor(exfiltrationProgress),
-    patient_safety: Math.floor(patientSafety),
-    counter_virus_progress: Math.floor(counterVirusProgress),
-    game_status: gameStatus,
-    game_session_id: gameSessionId,
-    sos_uses_left: Math.max(0, 3 - sosUses),
-    is_database_disconnected: isDatabaseDisconnected,
-    is_icu_offline: isICUOffline,
-    impact_metrics: {
-      stolen_records: stolenRecords,
-      compromised_systems: infectedSystems
-    },
-    emergency_funds: emergencyFunds
-  };
-  const channel = portal.channel("hospital-telemetry");
-  await channel.send({ content: payload });
+interface Player {
+  id: string;
+  name: string;
+  role: string;
+  lastSeen: number;
 }
 
-async function simulateAttackerEvent() {
-  if (gameStatus !== 'PLAYING') return; // Stop advancing if game over
+class Room {
+  roomId: string;
+  players: Map<string, Player> = new Map();
+  
+  exfiltrationProgress = 0;
+  stolenRecords = 0;
+  infectedSystems = 0;
+  emergencyFunds = 250000;
+  isDatabaseDisconnected = false;
+  isICUOffline = false;
+  patientSafety = 100;
+  counterVirusProgress = 0;
+  isDeployingVirus = false;
+  gameStatus: 'PLAYING' | 'WON' | 'LOST' = 'PLAYING';
+  gameSessionId = Date.now().toString();
+  sosUses = 0;
+  isFirstTick = true;
+  
+  activeVote: { action: string, approvals: Set<string>, timeout: NodeJS.Timeout | null } | null = null;
+  
+  lastPartialPayload: any = {
+    attack_phase: "Initial Breach",
+    attacker_terminal: { host_user: "strixx@c2:~#", executed_command: "ping", console_output: "Alive" },
+    server_status: "Critical"
+  };
 
-  if (isFirstTick) {
-    isFirstTick = false;
-    const initialContextMessage = "CRITICAL ALERT: The Nocturnal Strixx ransomware has breached the perimeter. Start the AI Counter-Virus immediately! You have 3 SOS emergency requests available. Good luck.";
-    const internalAdvisoryChannel = portal.channel("internal-advisory");
-    await internalAdvisoryChannel.send({
-      content: {
-        sender: "AI Crisis Advisor",
-        message: initialContextMessage,
-        priority: "CRITICAL",
-        session_id: gameSessionId,
-        timestamp: Date.now()
+  constructor(roomId: string) {
+    this.roomId = roomId;
+  }
+
+  resetGame() {
+    this.exfiltrationProgress = 0;
+    this.stolenRecords = 0;
+    this.infectedSystems = 0;
+    this.emergencyFunds = 250000;
+    this.isDatabaseDisconnected = false;
+    this.isICUOffline = false;
+    this.patientSafety = 100;
+    this.counterVirusProgress = 0;
+    this.isDeployingVirus = false;
+    this.gameStatus = 'PLAYING';
+    this.gameSessionId = Date.now().toString();
+    this.sosUses = 0;
+    this.isFirstTick = true;
+    if (this.activeVote?.timeout) clearTimeout(this.activeVote.timeout);
+    this.activeVote = null;
+  }
+
+  async broadcastTelemetry() {
+    const payload = {
+      ...this.lastPartialPayload,
+      exfiltration_progress: Math.floor(this.exfiltrationProgress),
+      patient_safety: Math.floor(this.patientSafety),
+      counter_virus_progress: Math.floor(this.counterVirusProgress),
+      game_status: this.gameStatus,
+      game_session_id: this.gameSessionId,
+      sos_uses_left: Math.max(0, 3 - this.sosUses),
+      is_database_disconnected: this.isDatabaseDisconnected,
+      is_icu_offline: this.isICUOffline,
+      impact_metrics: {
+        stolen_records: this.stolenRecords,
+        compromised_systems: this.infectedSystems
+      },
+      emergency_funds: this.emergencyFunds
+    };
+    const channel = portal.channel(`hospital-telemetry-${this.roomId}`);
+    await channel.send({ content: payload });
+  }
+
+  async simulateTick() {
+    if (this.gameStatus !== 'PLAYING') return; // Stop advancing if game over
+
+    if (this.isFirstTick) {
+      this.isFirstTick = false;
+      const initialContextMessage = "CRITICAL ALERT: The Nocturnal Strixx ransomware has breached the perimeter. Start the AI Counter-Virus immediately! You have 3 SOS emergency requests available. Good luck.";
+      const internalAdvisoryChannel = portal.channel(`internal-advisory-${this.roomId}`);
+      await internalAdvisoryChannel.send({
+        content: {
+          sender: "AI Crisis Advisor",
+          message: initialContextMessage,
+          priority: "CRITICAL",
+          session_id: this.gameSessionId,
+          timestamp: Date.now()
+        }
+      });
+    }
+
+    // Modify metrics based on state
+    if (!this.isDatabaseDisconnected) {
+      this.exfiltrationProgress = Math.min(100, this.exfiltrationProgress + (Math.random() * 4 + 8));
+      this.stolenRecords += Math.floor(Math.random() * 8000 + 2000);
+    } else {
+      this.patientSafety = Math.max(0, this.patientSafety - (Math.random() * 4 + 8));
+    }
+    
+    if (!this.isICUOffline) {
+      this.infectedSystems += Math.floor(Math.random() * 10 + 5);
+    } else {
+      this.infectedSystems += Math.floor(Math.random() * 3);
+      this.patientSafety = Math.max(0, this.patientSafety - (Math.random() * 3 + 4));
+    }
+
+    if (this.isDeployingVirus) {
+      this.counterVirusProgress = Math.min(100, this.counterVirusProgress + (Math.random() * 4 + 6));
+    }
+
+    // Check Win/Loss
+    if (this.exfiltrationProgress >= 100 || this.patientSafety <= 0) {
+      this.gameStatus = 'LOST';
+    } else if (this.counterVirusProgress >= 100) {
+      this.gameStatus = 'WON';
+    }
+
+    try {
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "system", content: getAttackerInstruction(this.isDatabaseDisconnected, this.isICUOffline) }],
+        response_format: { type: "json_object" }
+      });
+      const responseText = response.choices[0].message.content || '{}';
+      this.lastPartialPayload = JSON.parse(responseText);
+    } catch (apiError) {
+      console.warn(`[Room ${this.roomId}] OpenAI API failed, using fallback mock data...`);
+    }
+    
+    await this.broadcastTelemetry();
+  }
+
+  executeAction(actionName: string) {
+    if (actionName === 'Disconnect Database') {
+      this.isDatabaseDisconnected = true;
+    } else if (actionName === 'Reconnect Database') {
+      this.isDatabaseDisconnected = false;
+    } else if (actionName === 'Shutdown ICU Network') {
+      this.isICUOffline = true;
+      this.patientSafety = Math.max(0, this.patientSafety - 15);
+    } else if (actionName === 'Reconnect ICU Network') {
+      this.isICUOffline = false;
+    } else if (actionName === 'Pay Ransom') {
+      this.emergencyFunds = Math.max(0, this.emergencyFunds - 50000);
+      this.exfiltrationProgress = Math.max(0, this.exfiltrationProgress - 15);
+    } else if (actionName === 'Deploy AI Counter-Virus') {
+      this.isDeployingVirus = true;
+    } else if (actionName === 'Stall Attackers') {
+      this.exfiltrationProgress = Math.max(0, this.exfiltrationProgress - 5);
+    } else if (actionName === 'Reset Simulation') {
+      this.resetGame();
+    }
+    
+    this.broadcastTelemetry();
+  }
+}
+
+class GameServer {
+  rooms: Map<string, Room> = new Map();
+
+  start() {
+    console.log("Starting Nocturnal StrixX Backend (Multi-Room Edition)...");
+    
+    this.startLobbyListener();
+    this.startSOSListener();
+    this.startVoteListener();
+    
+    // Main Game Loop across all active rooms
+    setInterval(() => {
+      const now = Date.now();
+      for (const [roomId, room] of this.rooms.entries()) {
+        
+        // Clean up inactive players (missed heartbeats for 15s)
+        for (const [playerId, player] of room.players.entries()) {
+          if (now - player.lastSeen > 15000) {
+            console.log(`[Room ${roomId}] Player ${playerId} timed out. Removing.`);
+            room.players.delete(playerId);
+          }
+        }
+        
+        // If room is empty, we could optionally pause it or destroy it.
+        // For now, we just keep running it, but we could stop it if needed.
+        if (room.players.size > 0) {
+          room.simulateTick();
+        }
+      }
+    }, 20000);
+  }
+
+  getOrCreateRoom(roomId: string): Room {
+    if (!this.rooms.has(roomId)) {
+      console.log(`[Server] Creating new room: ${roomId}`);
+      const newRoom = new Room(roomId);
+      this.rooms.set(roomId, newRoom);
+      // Run initial tick
+      newRoom.simulateTick();
+    }
+    return this.rooms.get(roomId)!;
+  }
+
+  startLobbyListener() {
+    const lobbyChannel = portal.channel("lobby-system");
+    lobbyChannel.acquire();
+
+    lobbyChannel.on('message', (message: any) => {
+      const data = message.content?.content || message.content;
+      if (!data || !data.type) return;
+
+      const roomId = data.roomId;
+      const playerId = data.playerId || message.senderId;
+
+      if (data.type === 'join_request') {
+        const room = this.rooms.get(roomId);
+        const playerCount = room ? room.players.size : 0;
+        
+        if (playerCount >= 3 && !room?.players.has(playerId)) {
+          // Room full
+          portal.channel(`lobby-events-${playerId}`).send({
+            content: { type: 'join_rejected', reason: 'Room is full (max 3 players)' }
+          });
+        } else {
+          // Join success
+          const activeRoom = this.getOrCreateRoom(roomId);
+          activeRoom.players.set(playerId, {
+            id: playerId,
+            name: data.name,
+            role: data.role,
+            lastSeen: Date.now()
+          });
+          console.log(`[Room ${roomId}] Player ${playerId} joined. Total: ${activeRoom.players.size}/3`);
+          
+          portal.channel(`lobby-events-${playerId}`).send({
+            content: { type: 'join_accepted', roomId }
+          });
+        }
+      } else if (data.type === 'heartbeat') {
+        if (roomId && this.rooms.has(roomId)) {
+          const room = this.rooms.get(roomId)!;
+          if (room.players.has(playerId)) {
+            room.players.get(playerId)!.lastSeen = Date.now();
+          }
+        }
       }
     });
   }
 
-  // Modify metrics based on state
-  if (!isDatabaseDisconnected) {
-    exfiltrationProgress = Math.min(100, exfiltrationProgress + (Math.random() * 4 + 8)); // 8-12% per tick
-    stolenRecords += Math.floor(Math.random() * 8000 + 2000);
-  } else {
-    // Database disconnected stops exfiltration, but hurts patient safety severely!
-    patientSafety = Math.max(0, patientSafety - (Math.random() * 4 + 8)); // 8-12% drop per tick
-  }
-  
-  if (!isICUOffline) {
-    infectedSystems += Math.floor(Math.random() * 10 + 5);
-  } else {
-    infectedSystems += Math.floor(Math.random() * 3);
-    patientSafety = Math.max(0, patientSafety - (Math.random() * 3 + 4)); // 4-7% drop per tick
-  }
+  startSOSListener() {
+    const sosChannel = portal.channel("sos-requests");
+    sosChannel.acquire();
 
-  if (isDeployingVirus) {
-    counterVirusProgress = Math.min(100, counterVirusProgress + (Math.random() * 4 + 6)); // 6-10% per tick (takes ~10-16 ticks)
-  }
+    sosChannel.on('message', async (message: any) => {
+      const data = message.content?.content || message.content;
+      if (!data || !data.roomId) return;
 
-  // Check Win/Loss
-  if (exfiltrationProgress >= 100 || patientSafety <= 0) {
-    gameStatus = 'LOST';
-  } else if (counterVirusProgress >= 100) {
-    gameStatus = 'WON';
-  }
+      const room = this.rooms.get(data.roomId);
+      if (!room || data.session_id !== room.gameSessionId) return;
 
-  console.log("Generating attacker simulation event via OpenAI...");
-  try {
-    const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      messages: [{ role: "system", content: getAttackerInstruction() }],
-      response_format: { type: "json_object" }
-    });
-    const responseText = response.choices[0].message.content || '{}';
-    lastPartialPayload = JSON.parse(responseText);
-  } catch (apiError) {
-    console.warn("OpenAI API failed (probably rate limit or network issue), using fallback mock data...");
-  }
-  
-  await broadcastTelemetry();
-}
-
-async function startSOSListener() {
-  const sosChannel = portal.channel("sos-requests");
-  const advisoryChannel = portal.channel("internal-advisory");
-
-  sosChannel.acquire();
-  advisoryChannel.acquire();
-
-  sosChannel.on('message', async (message: any) => {
-    const data = message.content?.content || message.content;
-    if (data.session_id !== gameSessionId) return; // Ignore historical or invalid requests
-
-    if (sosUses >= 3) {
-      console.log("SOS Limit reached, ignoring request");
-      return;
-    }
-
-    sosUses++;
-    console.log(`SOS Request received (Used: ${sosUses}/3):`, data);
-    
-    try {
-      const detailedContext = {
-        ...data,
-        database_status: isDatabaseDisconnected ? "DISCONNECTED (Safe from leak, but Patient Safety dropping!)" : "CONNECTED (Leaking data!)",
-        icu_status: isICUOffline ? "OFFLINE (Slows infection, hurts safety)" : "ONLINE (Vulnerable)",
-        patient_safety: `${Math.floor(patientSafety)}%`,
-        exfiltration_progress: `${Math.floor(exfiltrationProgress)}%`,
-        counter_virus_progress: `${Math.floor(counterVirusProgress)}%`
-      };
-      const context = JSON.stringify(detailedContext);
-      const prompt = `Current attack context:\n${context}\n\n${analystInstruction}\n\nGive your advice to the team:`;
-      
-      const response = await openai.chat.completions.create({
-        model: "gpt-4o-mini",
-        messages: [{ role: "system", content: prompt }]
-      });
-      
-      const advice = response.choices[0].message.content?.trim() || 'Warning: Cannot reach AI advisory...';
-      
-      console.log("Analyst Advice:", advice);
-      
-      await advisoryChannel.send({ 
-        content: {
-          id: Date.now().toString(),
-          timestamp: new Date().toISOString(),
-          message: advice,
-          sender: "Internal Security Analyst"
-        }
-      });
-    } catch (error) {
-      console.error("Error generating analyst advice:", error);
-    }
-  });
-}
-
-// Voting System State
-let activeVote: { action: string, approvals: Set<string>, timeout: NodeJS.Timeout | null } | null = null;
-
-async function startVoteListener() {
-  const actionsChannel = portal.channel("crisis-room-actions");
-  
-  actionsChannel.acquire();
-
-  actionsChannel.on('message', (message: any) => {
-    const data = message.content?.content || message.content;
-    if (!data) return;
-    if (data.session_id !== gameSessionId) return; // Ignore historical messages!
-
-    const senderId = message.senderId || data.sender;
-
-    if (data.type === 'vote_started') {
-      if (activeVote) return;
-      
-      console.log(`Vote started for ${data.action} by ${senderId}`);
-      
-      // Auto-pass immediately if Solo Player
-      if (data.isSoloPlayer) {
-        console.log(`Solo Player Mode: Auto-passing vote for ${data.action}`);
-        executeAction(data.action);
-        actionsChannel.send({ 
-          content: { 
-            type: 'vote_result', 
-            action: data.action, 
-            passed: true,
-            votes: 1,
-            session_id: gameSessionId
-          } 
-        });
+      if (room.sosUses >= 3) {
+        console.log(`[Room ${room.roomId}] SOS Limit reached, ignoring request`);
         return;
       }
 
-      activeVote = {
-        action: data.action,
-        approvals: new Set([senderId]),
-        timeout: setTimeout(() => {
-          if (activeVote) {
-            // Regular check if passed
-            const passed = activeVote.approvals.size >= 2;
-            
-            console.log(`Vote result for ${activeVote.action}: ${passed ? 'PASSED' : 'FAILED'} (Votes: ${activeVote.approvals.size})`);
-            
-            if (passed) {
-              executeAction(activeVote.action);
-            }
-            
-            actionsChannel.send({ 
-              content: { 
-                type: 'vote_result', 
-                action: activeVote.action, 
-                passed,
-                votes: activeVote.approvals.size
-              } 
-            });
-            
-            activeVote = null;
-          }
-        }, 10000)
-      };
+      room.sosUses++;
+      console.log(`[Room ${room.roomId}] SOS Request received (Used: ${room.sosUses}/3):`, data);
       
-    } else if (data.type === 'vote_cast' && activeVote && activeVote.action === data.action) {
-      if (data.vote === 'approve') {
-        activeVote.approvals.add(senderId);
-        console.log(`Vote cast by ${senderId} for ${activeVote.action}. Total: ${activeVote.approvals.size}`);
+      try {
+        const detailedContext = {
+          ...data,
+          database_status: room.isDatabaseDisconnected ? "DISCONNECTED (Safe from leak, but Patient Safety dropping!)" : "CONNECTED (Leaking data!)",
+          icu_status: room.isICUOffline ? "OFFLINE (Slows infection, hurts safety)" : "ONLINE (Vulnerable)",
+          patient_safety: \`\${Math.floor(room.patientSafety)}%\`,
+          exfiltration_progress: \`\${Math.floor(room.exfiltrationProgress)}%\`,
+          counter_virus_progress: \`\${Math.floor(room.counterVirusProgress)}%\`
+        };
+        const context = JSON.stringify(detailedContext);
+        const prompt = \`Current attack context:\\n\${context}\\n\\n\${analystInstruction}\\n\\nGive your advice to the team:\`;
+        
+        const response = await openai.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [{ role: "system", content: prompt }]
+        });
+        
+        const advice = response.choices[0].message.content?.trim() || 'Warning: Cannot reach AI advisory...';
+        
+        const advisoryChannel = portal.channel(\`internal-advisory-\${room.roomId}\`);
+        await advisoryChannel.send({ 
+          content: {
+            id: Date.now().toString(),
+            timestamp: new Date().toISOString(),
+            message: advice,
+            sender: "Internal Security Analyst"
+          }
+        });
+      } catch (error) {
+        console.error(\`[Room \${room.roomId}] Error generating analyst advice:\`, error);
       }
-    }
-  });
-}
-
-function executeAction(actionName: string) {
-  if (actionName === 'Disconnect Database') {
-    isDatabaseDisconnected = true;
-  } else if (actionName === 'Reconnect Database') {
-    isDatabaseDisconnected = false;
-  } else if (actionName === 'Shutdown ICU Network') {
-    isICUOffline = true;
-    patientSafety = Math.max(0, patientSafety - 15); // immediate penalty
-  } else if (actionName === 'Reconnect ICU Network') {
-    isICUOffline = false;
-  } else if (actionName === 'Pay Ransom') {
-    emergencyFunds = Math.max(0, emergencyFunds - 50000);
-    // Give some time penalty relief
-    exfiltrationProgress = Math.max(0, exfiltrationProgress - 15);
-  } else if (actionName === 'Deploy AI Counter-Virus') {
-    isDeployingVirus = true;
-  } else if (actionName === 'Stall Attackers') {
-    // Negotiator buys time, slight reduction, no cost
-    exfiltrationProgress = Math.max(0, exfiltrationProgress - 5);
-  } else if (actionName === 'Reset Simulation') {
-    resetGame();
+    });
   }
-  
-  // Immediately update UI without advancing time!
-  broadcastTelemetry();
+
+  startVoteListener() {
+    const actionsChannel = portal.channel("crisis-room-actions");
+    actionsChannel.acquire();
+
+    actionsChannel.on('message', (message: any) => {
+      const data = message.content?.content || message.content;
+      if (!data || !data.roomId) return;
+      
+      const room = this.rooms.get(data.roomId);
+      if (!room || data.session_id !== room.gameSessionId) return; 
+
+      const senderId = message.senderId || data.sender;
+      const roomActionsChannel = portal.channel(\`crisis-room-actions-\${room.roomId}\`);
+
+      if (data.type === 'vote_started') {
+        if (room.activeVote) return;
+        
+        console.log(\`[Room \${room.roomId}] Vote started for \${data.action} by \${senderId}\`);
+        
+        if (data.isSoloPlayer) {
+          room.executeAction(data.action);
+          roomActionsChannel.send({ 
+            content: { 
+              type: 'vote_result', 
+              action: data.action, 
+              passed: true,
+              votes: 1,
+              session_id: room.gameSessionId,
+              roomId: room.roomId
+            } 
+          });
+          return;
+        }
+
+        room.activeVote = {
+          action: data.action,
+          approvals: new Set([senderId]),
+          timeout: setTimeout(() => {
+            if (room.activeVote) {
+              const passed = room.activeVote.approvals.size >= 2;
+              
+              if (passed) {
+                room.executeAction(room.activeVote.action);
+              }
+              
+              roomActionsChannel.send({ 
+                content: { 
+                  type: 'vote_result', 
+                  action: room.activeVote.action, 
+                  passed,
+                  votes: room.activeVote.approvals.size,
+                  roomId: room.roomId
+                } 
+              });
+              
+              room.activeVote = null;
+            }
+          }, 10000)
+        };
+        
+        // Notify others in room that vote started
+        roomActionsChannel.send({ 
+          content: { 
+            type: 'vote_started_sync', 
+            action: data.action, 
+            sender: senderId,
+            isSoloPlayer: false,
+            roomId: room.roomId 
+          } 
+        });
+        
+      } else if (data.type === 'vote_cast' && room.activeVote && room.activeVote.action === data.action) {
+        if (data.vote === 'approve') {
+          room.activeVote.approvals.add(senderId);
+          roomActionsChannel.send({
+            content: {
+              type: 'vote_cast_sync',
+              action: data.action,
+              roomId: room.roomId
+            }
+          });
+        }
+      }
+    });
+  }
 }
 
-// Start simulation loop
-console.log("Starting Nocturnal StrixX Backend (Crisis Room Edition)...");
-startSOSListener();
-startVoteListener();
-simulateAttackerEvent();
-setInterval(simulateAttackerEvent, 20000); // 20 seconds per tick to allow time for voting
+const server = new GameServer();
+server.start();
