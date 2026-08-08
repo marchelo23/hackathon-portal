@@ -1,6 +1,9 @@
 import { OpenAI } from 'openai';
 import { Portal } from '@portalsdk/core';
 import dotenv from 'dotenv';
+import WS from 'ws';
+
+(global as any).WebSocket = WS;
 
 // Configure dotenv to read from the parent directory where the user placed .env
 dotenv.config({ path: '../.env' });

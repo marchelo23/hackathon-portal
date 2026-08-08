@@ -16,7 +16,8 @@
   "dependencies": {
     "@portalsdk/core": "^0.1.5",
     "dotenv": "^17.4.2",
-    "openai": "^7.4.0"
+    "openai": "^7.4.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",

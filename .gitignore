@@ -1,3 +1,8 @@
 node_modules/\n.env
 .env
 node_modules/
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+terraform/.terraform.lock.hcl
