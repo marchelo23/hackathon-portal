@@ -3,7 +3,8 @@ import { PortalProvider, useChannel } from '@portalsdk/react';
 import { Portal } from '@portalsdk/core';
 import { ShieldAlert, Activity, Skull, Terminal, AlertTriangle, MessageSquareWarning, Power, Database, DollarSign, Users, Check, X, MousePointer2 } from 'lucide-react';
 
-const PORTAL_API_KEY = import.meta.env.VITE_PORTAL_API_KEY || 'pk_dummy_key';
+let PORTAL_API_KEY = import.meta.env.VITE_PORTAL_API_KEY || 'pk_dummy_key';
+PORTAL_API_KEY = PORTAL_API_KEY.replace(/["']/g, '');
 const portal = new Portal({ apiKey: PORTAL_API_KEY });
 
 // -- TYPES --
