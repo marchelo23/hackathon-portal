@@ -18,14 +18,14 @@ const portal = new Portal({ apiKey: PORTAL_API_KEY });
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 const model = genAI.getGenerativeModel({
-  model: "gemini-3.5-flash",
+  model: "gemini-1.5-flash",
   generationConfig: {
     responseMimeType: "application/json",
   }
 });
 
 const textModel = genAI.getGenerativeModel({
-  model: "gemini-3.5-flash",
+  model: "gemini-1.5-flash",
 });
 
 // Global state for simulation
@@ -76,10 +76,25 @@ async function simulateAttackerEvent() {
     }
 
     console.log("Generating attacker simulation event via Gemini...");
-    const result = await model.generateContent(getAttackerInstruction());
-    const responseText = result.response.text();
     
-    const partialPayload = JSON.parse(responseText);
+    let partialPayload;
+    try {
+      const result = await model.generateContent(getAttackerInstruction());
+      const responseText = result.response.text();
+      partialPayload = JSON.parse(responseText);
+    } catch (genError) {
+      console.warn("Gemini API failed (probably rate limit), using fallback mock data...");
+      partialPayload = {
+        attack_phase: "Automated Exfiltration (Fallback Mode)",
+        attacker_terminal: {
+          host_user: "strixx@c2-server:~#",
+          executed_command: "./exfil_agent --bypass-fw",
+          console_output: "Connection established. Transferring bits... [Rate Limit Exceeded locally]"
+        },
+        server_status: "Compromised"
+      };
+    }
+    
     const payload = {
       ...partialPayload,
       exfiltration_progress: Math.floor(exfiltrationProgress),
@@ -201,4 +216,4 @@ console.log("Starting Nocturnal StrixX Backend (Crisis Room Edition)...");
 startSOSListener();
 startVoteListener();
 simulateAttackerEvent();
-setInterval(simulateAttackerEvent, 15000);
+setInterval(simulateAttackerEvent, 30000);
