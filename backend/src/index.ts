@@ -112,10 +112,11 @@ async function startSOSListener() {
   const advisoryChannel = portal.channel("internal-advisory");
 
   sosChannel.on('message', async (message: any) => {
-    console.log("SOS Request received:", message.content);
+    const data = message.content?.content || message.content;
+    console.log("SOS Request received:", data);
     
     try {
-      const context = JSON.stringify(message.content);
+      const context = JSON.stringify(data);
       const prompt = `Current attack context:\n${context}\n\n${analystInstruction}\n\nGive your advice to the team:`;
       
       const response = await openai.chat.completions.create({
@@ -148,22 +149,23 @@ async function startVoteListener() {
   const actionsChannel = portal.channel("crisis-room-actions");
   
   actionsChannel.on('message', (message: any) => {
-    const content = message.content;
-    const senderId = message.senderId || content.sender;
+    const data = message.content?.content || message.content;
+    if (!data) return;
+    const senderId = message.senderId || data.sender;
 
-    if (content.type === 'vote_started') {
+    if (data.type === 'vote_started') {
       if (activeVote) return;
       
-      console.log(`Vote started for ${content.action} by ${senderId}`);
+      console.log(`Vote started for ${data.action} by ${senderId}`);
       
       // Auto-pass immediately if Solo Player
-      if (content.isSoloPlayer) {
-        console.log(`Solo Player Mode: Auto-passing vote for ${content.action}`);
-        executeAction(content.action);
+      if (data.isSoloPlayer) {
+        console.log(`Solo Player Mode: Auto-passing vote for ${data.action}`);
+        executeAction(data.action);
         actionsChannel.send({ 
           content: { 
             type: 'vote_result', 
-            action: content.action, 
+            action: data.action, 
             passed: true,
             votes: 1
           } 
@@ -172,7 +174,7 @@ async function startVoteListener() {
       }
 
       activeVote = {
-        action: content.action,
+        action: data.action,
         approvals: new Set([senderId]),
         timeout: setTimeout(() => {
           if (activeVote) {
@@ -199,8 +201,8 @@ async function startVoteListener() {
         }, 10000)
       };
       
-    } else if (content.type === 'vote_cast' && activeVote && activeVote.action === content.action) {
-      if (content.vote === 'approve') {
+    } else if (data.type === 'vote_cast' && activeVote && activeVote.action === data.action) {
+      if (data.vote === 'approve') {
         activeVote.approvals.add(senderId);
         console.log(`Vote cast by ${senderId} for ${activeVote.action}. Total: ${activeVote.approvals.size}`);
       }
