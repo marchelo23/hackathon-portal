@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { PortalProvider, useChannel } from '@portalsdk/react';
 import { Portal } from '@portalsdk/core';
 import { ShieldAlert, Activity, Skull, Terminal, AlertTriangle, MessageSquareWarning, Power, Database, DollarSign, Users, Check, X, MousePointer2 } from 'lucide-react';
@@ -254,7 +254,7 @@ function Dashboard({ userName, userRole, roomId }: { userName: string, userRole:
           setActiveVote(null);
           setCurrentGameSessionId(data.game_session_id);
         } else {
-          if (!currentGameSessionId && data.game_session_id) {
+          if (data.game_session_id && currentGameSessionId !== data.game_session_id) {
             setCurrentGameSessionId(data.game_session_id);
           }
           setEvents(prev => [data, ...prev].slice(0, 10));
@@ -278,20 +278,25 @@ function Dashboard({ userName, userRole, roomId }: { userName: string, userRole:
     }
   }, [advisoryMessages]);
 
+  const processedActionIds = useRef<Set<string>>(new Set());
+  
   // Vote Sync
   useEffect(() => {
     if (actionMessages.length > 0) {
       const latestMsg = actionMessages[actionMessages.length - 1];
+      if (processedActionIds.current.has(latestMsg.id)) return;
+      processedActionIds.current.add(latestMsg.id);
+      
       const payload = latestMsg.content as any;
       const data = payload.content || payload;
       
-      if (data.type === 'vote_started') {
+      if (data.type === 'vote_started' || data.type === 'vote_started_sync') {
         if (data.isSoloPlayer) {
           return; // Bypass voting modal for solo player
         }
         setActiveVote({ action: data.action, approvals: 1, timer: 10, hasVoted: data.sender === userName });
-      } else if (data.type === 'vote_cast' && activeVote && data.action === activeVote.action) {
-        setActiveVote(prev => prev ? { ...prev, approvals: prev.approvals + 1 } : null);
+      } else if (data.type === 'vote_cast') {
+        setActiveVote(prev => prev && data.action === prev.action ? { ...prev, approvals: prev.approvals + 1 } : prev);
       } else if (data.type === 'vote_result') {
         setActiveVote(null);
         setPendingAction(null);
@@ -300,7 +305,7 @@ function Dashboard({ userName, userRole, roomId }: { userName: string, userRole:
         }
       }
     }
-  }, [actionMessages, activeVote, userName]);
+  }, [actionMessages, userName]);
 
   // Local Vote Timer
   useEffect(() => {
@@ -821,7 +826,7 @@ export default function App() {
       listenerChannel.release();
       setJoinError("Connection timeout. Is the server running?");
       setIsJoining(false);
-    }, 5000);
+    }, 15000);
   };
 
   if (!user) {

@@ -434,6 +434,15 @@ class GameServer {
         });
       } catch (error) {
         console.error(`[Room ${room.roomId}] Error generating analyst advice:`, error);
+        const advisoryChannel = portal.channel(`internal-advisory-${room.roomId}`);
+        await advisoryChannel.send({ 
+          content: {
+            id: Date.now().toString(),
+            timestamp: new Date().toISOString(),
+            message: "WARNING: Connection to AI Advisory lost. Unable to provide tactical advice. You must rely on your team's judgement to survive this attack phase.",
+            sender: "System Error"
+          }
+        });
       }
     });
   }
