@@ -17,6 +17,13 @@ interface TerminalData {
 interface StrixxEvent {
   attack_phase: string;
   exfiltration_progress: number;
+  patient_safety: number;
+  counter_virus_progress: number;
+  game_status: 'PLAYING' | 'WON' | 'LOST';
+  game_session_id: string;
+  sos_uses_left?: number;
+  is_database_disconnected?: boolean;
+  is_icu_offline?: boolean;
   attacker_terminal: TerminalData;
   server_status: string;
   emergency_funds?: number;
@@ -157,6 +164,9 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
   const [isRequestingSOS, setIsRequestingSOS] = useState(false);
   const [activeVote, setActiveVote] = useState<ActiveVote | null>(null);
   const [otherCursors, setOtherCursors] = useState<Record<string, CursorData>>({});
+  const [completedActions, setCompletedActions] = useState<string[]>([]);
+  const [pendingAction, setPendingAction] = useState<string | null>(null);
+  const [currentGameSessionId, setCurrentGameSessionId] = useState<string | null>(null);
   
   const isGodMode = userRole === 'God Mode';
   const canInteractIT = isGodMode || userRole === 'IT Architect';
@@ -208,10 +218,23 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
       const payload = latestMsg.content as any;
       const data = payload.content || payload;
       if (data && data.attack_phase) {
-        setEvents(prev => [data, ...prev].slice(0, 10));
+        if (data.game_session_id && currentGameSessionId && data.game_session_id !== currentGameSessionId) {
+          // New game session detected! Clear all historical state.
+          setEvents([data]);
+          setCompletedActions([]);
+          setAdvisories([]);
+          setPendingAction(null);
+          setActiveVote(null);
+          setCurrentGameSessionId(data.game_session_id);
+        } else {
+          if (!currentGameSessionId && data.game_session_id) {
+            setCurrentGameSessionId(data.game_session_id);
+          }
+          setEvents(prev => [data, ...prev].slice(0, 10));
+        }
       }
     }
-  }, [telemetryMessages]);
+  }, [telemetryMessages, currentGameSessionId]);
 
   useEffect(() => {
     if (advisoryMessages.length > 0) {
@@ -244,6 +267,10 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
         setActiveVote(prev => prev ? { ...prev, approvals: prev.approvals + 1 } : null);
       } else if (data.type === 'vote_result') {
         setActiveVote(null);
+        setPendingAction(null);
+        if (data.passed) {
+          setCompletedActions(prev => prev.includes(data.action) ? prev : [...prev, data.action]);
+        }
       }
     }
   }, [actionMessages, activeVote, userName]);
@@ -270,6 +297,7 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
     portal.channel('sos-requests').send({
       content: {
         timestamp: new Date().toISOString(),
+        session_id: latestEvent.game_session_id,
         current_state: {
           phase: latestEvent.attack_phase,
           progress: latestEvent.exfiltration_progress,
@@ -280,9 +308,10 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
   };
 
   const initiateAction = (actionName: string) => {
-    if (activeVote) return;
+    if (activeVote || pendingAction) return;
+    setPendingAction(actionName);
     sendAction({
-      content: { type: 'vote_started', action: actionName, sender: userName, isSoloPlayer: isGodMode }
+      content: { type: 'vote_started', action: actionName, sender: userName, isSoloPlayer: isGodMode, session_id: currentGameSessionId }
     });
   };
 
@@ -291,7 +320,7 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
     setActiveVote(prev => prev ? { ...prev, hasVoted: true } : null);
     if (approve) {
       sendAction({
-        content: { type: 'vote_cast', action: activeVote.action, vote: 'approve', sender: userName }
+        content: { type: 'vote_cast', action: activeVote.action, vote: 'approve', sender: userName, session_id: currentGameSessionId }
       });
     }
   };
@@ -311,6 +340,45 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
           </div>
         </div>
       ))}
+
+      {/* Game Over / Victory Modal */}
+      {(latestEvent?.game_status === 'LOST' || latestEvent?.game_status === 'WON') && (
+        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center animate-fade-in p-4 text-center">
+          {latestEvent.game_status === 'LOST' ? (
+            <>
+              <Skull className="w-32 h-32 text-red-600 mb-6 animate-pulse" />
+              <h1 className="text-5xl md:text-7xl font-black text-red-500 uppercase tracking-widest font-['Orbitron',sans-serif] drop-shadow-[0_0_20px_rgba(220,38,38,0.8)] mb-4">
+                SYSTEM BREACHED
+              </h1>
+              <p className="text-xl md:text-2xl text-red-400 font-bold max-w-2xl">
+                The ransomware successfully exfiltrated all critical data or compromised patient safety beyond recovery. The hospital is offline.
+              </p>
+            </>
+          ) : (
+            <>
+              <ShieldAlert className="w-32 h-32 text-emerald-500 mb-6 drop-shadow-[0_0_20px_rgba(16,185,129,0.8)]" />
+              <h1 className="text-5xl md:text-7xl font-black text-emerald-400 uppercase tracking-widest font-['Orbitron',sans-serif] drop-shadow-[0_0_20px_rgba(16,185,129,0.8)] mb-4">
+                THREAT NEUTRALIZED
+              </h1>
+              <p className="text-xl md:text-2xl text-emerald-300 font-bold max-w-2xl">
+                The AI Counter-Virus was successfully deployed. The attacker has been disconnected and internal systems are secure!
+              </p>
+            </>
+          )}
+          <button 
+            onClick={() => {
+              sendAction({ content: { type: 'vote_started', action: 'Reset Simulation', sender: userName, isSoloPlayer: true, session_id: currentGameSessionId } });
+            }}
+            className={`mt-10 px-8 py-4 rounded-xl font-bold uppercase tracking-wider transition-all shadow-xl hover:scale-105 ${
+              latestEvent.game_status === 'LOST' 
+                ? 'bg-red-900/50 hover:bg-red-600 border border-red-500 text-red-100' 
+                : 'bg-emerald-900/50 hover:bg-emerald-600 border border-emerald-500 text-emerald-100'
+            }`}
+          >
+            Acknowledge & Restart Simulation
+          </button>
+        </div>
+      )}
 
       {/* Vote Modal */}
       {activeVote && (
@@ -410,6 +478,17 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
                   </div>
                 </div>
 
+                <div className="bg-slate-900/40 rounded-xl p-4 border border-blue-500/10 relative overflow-hidden">
+                  <div className={`absolute left-0 top-0 bottom-0 w-1 ${latestEvent?.patient_safety && latestEvent.patient_safety < 40 ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)] animate-pulse' : 'bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.8)]'}`}></div>
+                  <p className="text-xs font-medium text-blue-300/70 uppercase tracking-widest mb-1 font-['Orbitron',sans-serif]">Patient Safety</p>
+                  <p className={`text-3xl font-black font-['Orbitron',sans-serif] mb-2 ${latestEvent?.patient_safety && latestEvent.patient_safety < 40 ? 'text-red-400' : 'text-blue-400'}`}>
+                    {latestEvent?.patient_safety ?? 100}%
+                  </p>
+                  <div className="w-full bg-black rounded-full h-2">
+                    <div className={`h-2 rounded-full transition-all duration-1000 ${latestEvent?.patient_safety && latestEvent.patient_safety < 40 ? 'bg-red-500' : 'bg-blue-500'}`} style={{ width: `${latestEvent?.patient_safety ?? 100}%` }}></div>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-orange-950/20 rounded-xl p-4 border border-orange-500/10">
                     <p className="text-[10px] font-medium text-orange-300/70 uppercase tracking-widest mb-1">Stolen Records</p>
@@ -442,32 +521,63 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
               
               <div className="flex flex-col gap-3">
                 <button 
-                  disabled={!canInteractIT}
-                  onClick={() => initiateAction('Disconnect Database')}
-                  className="group relative w-full text-left bg-slate-900/50 hover:bg-slate-800 border border-slate-700 hover:border-blue-500/50 p-4 rounded-xl transition-all duration-300 disabled:opacity-50"
+                  disabled={!canInteractIT || completedActions.includes('Deploy AI Counter-Virus') || pendingAction === 'Deploy AI Counter-Virus'}
+                  onClick={() => initiateAction('Deploy AI Counter-Virus')}
+                  className={`group relative w-full text-left bg-blue-950/20 hover:bg-blue-900/40 border ${completedActions.includes('Deploy AI Counter-Virus') ? 'border-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'border-blue-500/50 hover:border-cyan-400'} p-4 rounded-xl transition-all duration-300 disabled:opacity-50 overflow-hidden`}
+                >
+                  {/* Progress bar background for counter-virus */}
+                  {completedActions.includes('Deploy AI Counter-Virus') && latestEvent?.counter_virus_progress !== undefined && (
+                    <div 
+                      className="absolute left-0 top-0 bottom-0 bg-blue-600/20 transition-all duration-1000 ease-linear"
+                      style={{ width: `${latestEvent.counter_virus_progress}%` }}
+                    />
+                  )}
+                  <div className="relative z-10 flex items-start gap-3">
+                    <div className="p-2 bg-blue-900/50 rounded-lg group-hover:bg-cyan-500/20 group-hover:text-cyan-400 text-blue-300">
+                      <Terminal className={`w-5 h-5 ${completedActions.includes('Deploy AI Counter-Virus') && 'animate-pulse'}`} />
+                    </div>
+                    <div>
+                      <h3 className={`text-sm font-bold uppercase tracking-wide ${completedActions.includes('Deploy AI Counter-Virus') ? 'text-cyan-300' : 'text-blue-300'}`}>
+                        {pendingAction === 'Deploy AI Counter-Virus' ? 'Initializing...' : completedActions.includes('Deploy AI Counter-Virus') ? `Compiling... ${latestEvent?.counter_virus_progress || 0}%` : 'Deploy AI Counter-Virus'}
+                      </h3>
+                      <p className="text-[10px] text-blue-200/60 mt-1">Definitive countermeasure. Takes ~260s to compile. Survive until it finishes.</p>
+                    </div>
+                  </div>
+                </button>
+
+                <div className="h-px bg-slate-800 my-1"></div>
+
+                <button 
+                  disabled={!canInteractIT || pendingAction === 'Disconnect Database' || pendingAction === 'Reconnect Database'}
+                  onClick={() => initiateAction(latestEvent?.is_database_disconnected ? 'Reconnect Database' : 'Disconnect Database')}
+                  className={`group relative w-full text-left bg-slate-900/50 hover:bg-slate-800 border ${latestEvent?.is_database_disconnected ? 'border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]' : 'border-slate-700 hover:border-blue-500/50'} p-4 rounded-xl transition-all duration-300 disabled:opacity-50`}
                 >
                   <div className="relative z-10 flex items-start gap-3">
-                    <div className="p-2 bg-slate-800 rounded-lg group-hover:bg-blue-500/20 group-hover:text-blue-400">
+                    <div className={`p-2 rounded-lg ${latestEvent?.is_database_disconnected ? 'bg-red-500/20 text-red-400' : 'bg-slate-800 group-hover:bg-blue-500/20 group-hover:text-blue-400'}`}>
                       <Database className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wide">Disconnect DB</h3>
+                      <h3 className={`text-sm font-bold uppercase tracking-wide ${latestEvent?.is_database_disconnected ? 'text-red-400' : 'text-slate-200'}`}>
+                        {pendingAction === 'Disconnect Database' || pendingAction === 'Reconnect Database' ? 'Executing...' : latestEvent?.is_database_disconnected ? 'DB IS DISCONNECTED (Click to Reconnect)' : 'Disconnect DB'}
+                      </h3>
                       <p className="text-[10px] text-slate-400 mt-1">Stops data leak NOW, operational cost is HIGH.</p>
                     </div>
                   </div>
                 </button>
 
                 <button 
-                  disabled={!canInteractIT}
-                  onClick={() => initiateAction('Shutdown ICU Network')}
-                  className="group relative w-full text-left bg-slate-900/50 hover:bg-slate-800 border border-slate-700 hover:border-orange-500/50 p-4 rounded-xl transition-all duration-300 disabled:opacity-50"
+                  disabled={!canInteractIT || pendingAction === 'Shutdown ICU Network' || pendingAction === 'Reconnect ICU Network'}
+                  onClick={() => initiateAction(latestEvent?.is_icu_offline ? 'Reconnect ICU Network' : 'Shutdown ICU Network')}
+                  className={`group relative w-full text-left bg-slate-900/50 hover:bg-slate-800 border ${latestEvent?.is_icu_offline ? 'border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.2)]' : 'border-slate-700 hover:border-orange-500/50'} p-4 rounded-xl transition-all duration-300 disabled:opacity-50`}
                 >
                   <div className="relative z-10 flex items-start gap-3">
-                    <div className="p-2 bg-slate-800 rounded-lg group-hover:bg-orange-500/20 group-hover:text-orange-400">
+                    <div className={`p-2 rounded-lg ${latestEvent?.is_icu_offline ? 'bg-red-500/20 text-red-400' : 'bg-slate-800 group-hover:bg-orange-500/20 group-hover:text-orange-400'}`}>
                       <Power className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wide">Shutdown ICU Network</h3>
+                      <h3 className={`text-sm font-bold uppercase tracking-wide ${latestEvent?.is_icu_offline ? 'text-red-400' : 'text-slate-200'}`}>
+                        {pendingAction === 'Shutdown ICU Network' || pendingAction === 'Reconnect ICU Network' ? 'Executing...' : latestEvent?.is_icu_offline ? 'ICU IS OFFLINE (Click to Reconnect)' : 'Shutdown ICU Network'}
+                      </h3>
                       <p className="text-[10px] text-slate-400 mt-1">Slows attack, puts critical patients at risk.</p>
                     </div>
                   </div>
@@ -483,17 +593,45 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
               {!canInteractFin && <p className="text-xs text-emerald-400/80 mb-3 font-bold">Locked: Requires CFO role</p>}
 
               <button 
-                  disabled={!canInteractFin}
+                  disabled={!canInteractFin || pendingAction === 'Pay Ransom'}
                   onClick={() => initiateAction('Pay Ransom')}
-                  className="group relative w-full text-left bg-slate-900/50 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500/50 p-4 rounded-xl transition-all duration-300 disabled:opacity-50"
+                  className={`group relative w-full text-left bg-slate-900/50 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500/50 p-4 rounded-xl transition-all duration-300 disabled:opacity-50`}
                 >
                   <div className="relative z-10 flex items-start gap-3">
                     <div className="p-2 bg-slate-800 rounded-lg group-hover:bg-emerald-500/20 group-hover:text-emerald-400">
                       <DollarSign className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wide">Pay Partial Ransom</h3>
+                      <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wide">
+                        {pendingAction === 'Pay Ransom' ? 'Processing Payment...' : 'Pay Partial Ransom'}
+                      </h3>
                       <p className="text-[10px] text-slate-400 mt-1">Consumes funds (-$50k), buys time (-10% exfiltration).</p>
+                    </div>
+                  </div>
+                </button>
+            </div>
+
+            {/* Hostile Negotiations Panel */}
+            <div className={`bg-black/60 backdrop-blur-3xl border rounded-2xl p-5 shadow-2xl relative transition-all ${canInteractNeg ? 'border-purple-500/50 shadow-[0_0_20px_rgba(168,85,247,0.1)]' : 'border-slate-800 opacity-70'}`}>
+              <h2 className="text-sm font-bold text-slate-300 uppercase tracking-widest mb-4 flex items-center gap-2 font-['Orbitron',sans-serif]">
+                <MessageSquareWarning className={`w-4 h-4 ${canInteractNeg ? 'text-purple-400' : 'text-slate-500'}`} /> Hostile Negotiations
+              </h2>
+              {!canInteractNeg && <p className="text-xs text-purple-400/80 mb-3 font-bold">Locked: Requires Negotiator role</p>}
+
+              <button 
+                  disabled={!canInteractNeg || pendingAction === 'Stall Attackers'}
+                  onClick={() => initiateAction('Stall Attackers')}
+                  className={`group relative w-full text-left bg-slate-900/50 hover:bg-slate-800 border border-slate-700 hover:border-purple-500/50 p-4 rounded-xl transition-all duration-300 disabled:opacity-50`}
+                >
+                  <div className="relative z-10 flex items-start gap-3">
+                    <div className="p-2 bg-slate-800 rounded-lg group-hover:bg-purple-500/20 group-hover:text-purple-400">
+                      <MessageSquareWarning className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wide">
+                        {pendingAction === 'Stall Attackers' ? 'Negotiating...' : 'Stall Attackers (Delay)'}
+                      </h3>
+                      <p className="text-[10px] text-slate-400 mt-1">Talk to the hackers to buy time. Reduces exfiltration by 5%.</p>
                     </div>
                   </div>
                 </button>
@@ -512,15 +650,15 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
                 {!canInteractNeg && <span className="text-xs text-blue-400/80 font-bold">Locked: Requires Negotiator role</span>}
                 <button 
                   onClick={handleSOSRequest}
-                  disabled={isRequestingSOS || !latestEvent || !canInteractNeg}
+                  disabled={isRequestingSOS || !latestEvent || !canInteractNeg || latestEvent?.sos_uses_left === 0}
                   className={`flex items-center gap-2 px-4 py-1.5 rounded-lg font-bold text-xs uppercase tracking-wider transition-all duration-300 ${
-                    (isRequestingSOS || !canInteractNeg)
+                    (isRequestingSOS || !canInteractNeg || latestEvent?.sos_uses_left === 0)
                     ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
                     : 'bg-red-600 hover:bg-red-500 text-white shadow-[0_0_15px_rgba(220,38,38,0.5)]'
                   }`}
                 >
                   <AlertTriangle className="w-4 h-4" />
-                  {isRequestingSOS ? 'Consulting...' : 'SOS: Request Help'}
+                  {isRequestingSOS ? 'Consulting...' : `SOS: Request Help (${latestEvent?.sos_uses_left ?? 0} left)`}
                 </button>
               </div>
               
