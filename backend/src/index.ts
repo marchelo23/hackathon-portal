@@ -156,13 +156,28 @@ async function startVoteListener() {
       
       console.log(`Vote started for ${content.action} by ${senderId}`);
       
+      // Auto-pass immediately if Solo Player
+      if (content.isSoloPlayer) {
+        console.log(`Solo Player Mode: Auto-passing vote for ${content.action}`);
+        executeAction(content.action);
+        actionsChannel.send({ 
+          content: { 
+            type: 'vote_result', 
+            action: content.action, 
+            passed: true,
+            votes: 1
+          } 
+        });
+        return;
+      }
+
       activeVote = {
         action: content.action,
         approvals: new Set([senderId]),
         timeout: setTimeout(() => {
           if (activeVote) {
-            // Check if passed (we need 2 votes minimum, or if solo player initiated it, we auto pass)
-            const passed = activeVote.approvals.size >= 2 || content.isSoloPlayer;
+            // Regular check if passed
+            const passed = activeVote.approvals.size >= 2;
             
             console.log(`Vote result for ${activeVote.action}: ${passed ? 'PASSED' : 'FAILED'} (Votes: ${activeVote.approvals.size})`);
             
