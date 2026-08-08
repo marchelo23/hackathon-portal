@@ -317,12 +317,12 @@ class GameServer {
           ...data,
           database_status: room.isDatabaseDisconnected ? "DISCONNECTED (Safe from leak, but Patient Safety dropping!)" : "CONNECTED (Leaking data!)",
           icu_status: room.isICUOffline ? "OFFLINE (Slows infection, hurts safety)" : "ONLINE (Vulnerable)",
-          patient_safety: \`\${Math.floor(room.patientSafety)}%\`,
-          exfiltration_progress: \`\${Math.floor(room.exfiltrationProgress)}%\`,
-          counter_virus_progress: \`\${Math.floor(room.counterVirusProgress)}%\`
+          patient_safety: `${Math.floor(room.patientSafety)}%`,
+          exfiltration_progress: `${Math.floor(room.exfiltrationProgress)}%`,
+          counter_virus_progress: `${Math.floor(room.counterVirusProgress)}%`
         };
         const context = JSON.stringify(detailedContext);
-        const prompt = \`Current attack context:\\n\${context}\\n\\n\${analystInstruction}\\n\\nGive your advice to the team:\`;
+        const prompt = `Current attack context:\n${context}\n\n${analystInstruction}\n\nGive your advice to the team:`;
         
         const response = await openai.chat.completions.create({
           model: "gpt-4o-mini",
@@ -331,7 +331,7 @@ class GameServer {
         
         const advice = response.choices[0].message.content?.trim() || 'Warning: Cannot reach AI advisory...';
         
-        const advisoryChannel = portal.channel(\`internal-advisory-\${room.roomId}\`);
+        const advisoryChannel = portal.channel(`internal-advisory-${room.roomId}`);
         await advisoryChannel.send({ 
           content: {
             id: Date.now().toString(),
@@ -341,7 +341,7 @@ class GameServer {
           }
         });
       } catch (error) {
-        console.error(\`[Room \${room.roomId}] Error generating analyst advice:\`, error);
+        console.error(`[Room ${room.roomId}] Error generating analyst advice:`, error);
       }
     });
   }
@@ -358,12 +358,12 @@ class GameServer {
       if (!room || data.session_id !== room.gameSessionId) return; 
 
       const senderId = message.senderId || data.sender;
-      const roomActionsChannel = portal.channel(\`crisis-room-actions-\${room.roomId}\`);
+      const roomActionsChannel = portal.channel(`crisis-room-actions-${room.roomId}`);
 
       if (data.type === 'vote_started') {
         if (room.activeVote) return;
         
-        console.log(\`[Room \${room.roomId}] Vote started for \${data.action} by \${senderId}\`);
+        console.log(`[Room ${room.roomId}] Vote started for ${data.action} by ${senderId}`);
         
         if (data.isSoloPlayer) {
           room.executeAction(data.action);
