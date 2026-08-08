@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - PORTAL_API_KEY=${portal_api}
+      - GEMINI_API_KEY=${gemini_api}
+    restart: unless-stopped
+    # Use init to ensure proper signal handling for node
+    init: true
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - VITE_PORTAL_API_KEY=${portal_api}
+    ports:
+      - "80:80"
+    restart: unless-stopped
