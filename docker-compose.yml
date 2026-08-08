@@ -6,8 +6,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     environment:
+      - OPENAI_API_KEY=${openai_api}
       - PORTAL_API_KEY=${portal_api}
-      - GEMINI_API_KEY=${gemini_api}
     restart: unless-stopped
     # Use init to ensure proper signal handling for node
     init: true

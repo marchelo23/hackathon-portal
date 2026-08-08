@@ -1,4 +1,4 @@
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { OpenAI } from 'openai';
 import { Portal } from '@portalsdk/core';
 import dotenv from 'dotenv';
 
@@ -6,27 +6,16 @@ import dotenv from 'dotenv';
 dotenv.config({ path: '../.env' });
 
 const PORTAL_API_KEY = process.env.PORTAL_API_KEY?.replace(/["']/g, '');
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY?.replace(/["']/g, '');
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.replace(/["']/g, '');
 
-if (!PORTAL_API_KEY || !GEMINI_API_KEY) {
-  console.error("Missing PORTAL_API_KEY or GEMINI_API_KEY in environment variables.");
+if (!PORTAL_API_KEY || !OPENAI_API_KEY) {
+  console.error("Missing PORTAL_API_KEY or OPENAI_API_KEY in environment variables.");
   process.exit(1);
 }
 
 // Initialize clients
 const portal = new Portal({ apiKey: PORTAL_API_KEY });
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-
-const model = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash",
-  generationConfig: {
-    responseMimeType: "application/json",
-  }
-});
-
-const textModel = genAI.getGenerativeModel({
-  model: "gemini-1.5-flash",
-});
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 // Global state for simulation
 let exfiltrationProgress = 0;
@@ -75,15 +64,19 @@ async function simulateAttackerEvent() {
       infectedSystems += Math.floor(Math.random() * 2); // much slower
     }
 
-    console.log("Generating attacker simulation event via Gemini...");
+    console.log("Generating attacker simulation event via OpenAI...");
     
     let partialPayload;
     try {
-      const result = await model.generateContent(getAttackerInstruction());
-      const responseText = result.response.text();
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "system", content: getAttackerInstruction() }],
+        response_format: { type: "json_object" }
+      });
+      const responseText = response.choices[0].message.content || '{}';
       partialPayload = JSON.parse(responseText);
-    } catch (genError) {
-      console.warn("Gemini API failed (probably rate limit), using fallback mock data...");
+    } catch (apiError) {
+      console.warn("OpenAI API failed (probably rate limit or network issue), using fallback mock data...");
       partialPayload = {
         attack_phase: "Automated Exfiltration (Fallback Mode)",
         attacker_terminal: {
@@ -125,8 +118,12 @@ async function startSOSListener() {
       const context = JSON.stringify(message.content);
       const prompt = `Current attack context:\n${context}\n\n${analystInstruction}\n\nGive your advice to the team:`;
       
-      const result = await textModel.generateContent(prompt);
-      const advice = result.response.text().trim();
+      const response = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [{ role: "system", content: prompt }]
+      });
+      
+      const advice = response.choices[0].message.content?.trim() || 'Warning: Cannot reach AI advisory...';
       
       console.log("Analyst Advice:", advice);
       
