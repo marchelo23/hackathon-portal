@@ -236,6 +236,9 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
       const data = payload.content || payload;
       
       if (data.type === 'vote_started') {
+        if (data.isSoloPlayer) {
+          return; // Bypass voting modal for solo player
+        }
         setActiveVote({ action: data.action, approvals: 1, timer: 10, hasVoted: data.sender === userName });
       } else if (data.type === 'vote_cast' && activeVote && data.action === activeVote.action) {
         setActiveVote(prev => prev ? { ...prev, approvals: prev.approvals + 1 } : null);
@@ -243,7 +246,7 @@ function Dashboard({ userName, userRole }: { userName: string, userRole: Role })
         setActiveVote(null);
       }
     }
-  }, [actionMessages]);
+  }, [actionMessages, activeVote, userName]);
 
   // Local Vote Timer
   useEffect(() => {
