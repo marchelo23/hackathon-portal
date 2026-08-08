@@ -789,32 +789,33 @@ export default function App() {
     listenerChannel.acquire();
     
     let timeoutId: any;
+    let unsubscribe: () => void;
     
     const onMsg = (msg: any) => {
       const data = msg.content?.content || msg.content;
       if (data?.type === 'join_accepted' && data.roomId === roomCode) {
         clearTimeout(timeoutId);
-        listenerChannel.removeListener('message', onMsg);
+        if (unsubscribe) unsubscribe();
         listenerChannel.release();
         setUser({ name, role, roomId: roomCode });
         setIsJoining(false);
       } else if (data?.type === 'join_rejected') {
         clearTimeout(timeoutId);
-        listenerChannel.removeListener('message', onMsg);
+        if (unsubscribe) unsubscribe();
         listenerChannel.release();
         setJoinError(data.reason || 'Join rejected');
         setIsJoining(false);
       }
     };
     
-    listenerChannel.on('message', onMsg);
+    unsubscribe = listenerChannel.on('message', onMsg);
     
     portal.channel('lobby-system').send({
       content: { type: 'join_request', roomId: roomCode, name, role, playerId: name }
     });
     
     timeoutId = setTimeout(() => {
-      listenerChannel.removeListener('message', onMsg);
+      if (unsubscribe) unsubscribe();
       listenerChannel.release();
       setJoinError("Connection timeout. Is the server running?");
       setIsJoining(false);
