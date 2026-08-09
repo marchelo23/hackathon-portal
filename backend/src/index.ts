@@ -262,7 +262,7 @@ class GameServer {
         const room = this.rooms.get(roomId);
         if (!room || data.session_id !== room.gameSessionId) return; 
 
-        const senderId = message.senderId || data.sender;
+        const senderId = data.sender || message.senderId || 'unknown';
 
         if (data.type === 'vote_started') {
           if (room.activeVote) return;
@@ -324,13 +324,33 @@ class GameServer {
         } else if (data.type === 'vote_cast' && room.activeVote && room.activeVote.action === data.action) {
           if (data.vote === 'approve') {
             room.activeVote.approvals.add(senderId);
-            roomActionsChannel.send({
-              content: {
-                type: 'vote_cast_sync',
-                action: data.action,
-                roomId: room.roomId
-              }
-            });
+            
+            const passed = room.activeVote.approvals.size >= 2;
+            
+            if (passed) {
+              if (room.activeVote.timeout) clearTimeout(room.activeVote.timeout);
+              room.executeAction(room.activeVote.action);
+              
+              roomActionsChannel.send({ 
+                content: { 
+                  type: 'vote_result', 
+                  action: room.activeVote.action, 
+                  passed: true,
+                  votes: room.activeVote.approvals.size,
+                  roomId: room.roomId
+                } 
+              });
+              
+              room.activeVote = null;
+            } else {
+              roomActionsChannel.send({
+                content: {
+                  type: 'vote_cast_sync',
+                  action: data.action,
+                  roomId: room.roomId
+                }
+              });
+            }
           }
         }
       });
