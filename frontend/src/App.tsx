@@ -265,16 +265,17 @@ function Dashboard({ userName, userRole, roomId }: { userName: string, userRole:
 
   useEffect(() => {
     if (advisoryMessages.length > 0) {
-      const latestMsg = advisoryMessages[advisoryMessages.length - 1];
-      const payload = latestMsg.content as any;
-      const data = payload.content || payload;
-      if (data && data.message) {
-        setAdvisories(prev => {
-          if (prev.find(a => a.id === data.id)) return prev;
-          return [data, ...prev].slice(0, 5);
-        });
-        setIsRequestingSOS(false);
-      }
+      advisoryMessages.forEach(msg => {
+        const payload = msg.content as any;
+        const data = payload.content || payload;
+        if (data && data.message) {
+          setAdvisories(prev => {
+            if (prev.find(a => a.id === data.id)) return prev;
+            return [data, ...prev].slice(0, 5);
+          });
+          setIsRequestingSOS(false);
+        }
+      });
     }
   }, [advisoryMessages]);
 
@@ -283,27 +284,28 @@ function Dashboard({ userName, userRole, roomId }: { userName: string, userRole:
   // Vote Sync
   useEffect(() => {
     if (actionMessages.length > 0) {
-      const latestMsg = actionMessages[actionMessages.length - 1];
-      if (processedActionIds.current.has(latestMsg.id)) return;
-      processedActionIds.current.add(latestMsg.id);
-      
-      const payload = latestMsg.content as any;
-      const data = payload.content || payload;
-      
-      if (data.type === 'vote_started' || data.type === 'vote_started_sync') {
-        if (data.isSoloPlayer) {
-          return; // Bypass voting modal for solo player
+      actionMessages.forEach(msg => {
+        if (processedActionIds.current.has(msg.id)) return;
+        processedActionIds.current.add(msg.id);
+        
+        const payload = msg.content as any;
+        const data = payload.content || payload;
+        
+        if (data.type === 'vote_started' || data.type === 'vote_started_sync') {
+          if (data.isSoloPlayer) {
+            return; // Bypass voting modal for solo player
+          }
+          setActiveVote({ action: data.action, approvals: 1, timer: 10, hasVoted: data.sender === userName });
+        } else if (data.type === 'vote_cast') {
+          setActiveVote(prev => prev && data.action === prev.action ? { ...prev, approvals: prev.approvals + 1 } : prev);
+        } else if (data.type === 'vote_result') {
+          setActiveVote(null);
+          setPendingAction(null);
+          if (data.passed) {
+            setCompletedActions(prev => prev.includes(data.action) ? prev : [...prev, data.action]);
+          }
         }
-        setActiveVote({ action: data.action, approvals: 1, timer: 10, hasVoted: data.sender === userName });
-      } else if (data.type === 'vote_cast') {
-        setActiveVote(prev => prev && data.action === prev.action ? { ...prev, approvals: prev.approvals + 1 } : prev);
-      } else if (data.type === 'vote_result') {
-        setActiveVote(null);
-        setPendingAction(null);
-        if (data.passed) {
-          setCompletedActions(prev => prev.includes(data.action) ? prev : [...prev, data.action]);
-        }
-      }
+      });
     }
   }, [actionMessages, userName]);
 
@@ -328,6 +330,7 @@ function Dashboard({ userName, userRole, roomId }: { userName: string, userRole:
     
     portal.channel('sos-requests').send({
       content: {
+        roomId: roomId,
         timestamp: new Date().toISOString(),
         session_id: latestEvent.game_session_id,
         current_state: {
@@ -790,22 +793,28 @@ export default function App() {
     setIsJoining(true);
     setJoinError(null);
     
-    const listenerChannel = portal.channel(`lobby-events-${name}`);
+    // Create a safe player ID without spaces or special characters for the channel name
+    const safePlayerId = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+    
+    const listenerChannel = portal.channel(`lobby-events-${safePlayerId}`);
     listenerChannel.acquire();
     
     let timeoutId: any;
+    let intervalId: any;
     let unsubscribe: () => void;
     
     const onMsg = (msg: any) => {
       const data = msg.content?.content || msg.content;
       if (data?.type === 'join_accepted' && data.roomId === roomCode) {
         clearTimeout(timeoutId);
+        clearInterval(intervalId);
         if (unsubscribe) unsubscribe();
         listenerChannel.release();
         setUser({ name, role, roomId: roomCode });
         setIsJoining(false);
       } else if (data?.type === 'join_rejected') {
         clearTimeout(timeoutId);
+        clearInterval(intervalId);
         if (unsubscribe) unsubscribe();
         listenerChannel.release();
         setJoinError(data.reason || 'Join rejected');
@@ -815,13 +824,18 @@ export default function App() {
     
     unsubscribe = listenerChannel.on('message', onMsg);
     
-    setTimeout(() => {
+    const sendJoinRequest = () => {
       portal.channel('lobby-system').send({
-        content: { type: 'join_request', roomId: roomCode, name, role, playerId: name }
-      });
-    }, 500);
+        content: { type: 'join_request', roomId: roomCode, name, role, playerId: safePlayerId }
+      }).catch(() => {});
+    };
+
+    // Send immediately and then every 2 seconds until joined or timeout
+    sendJoinRequest();
+    intervalId = setInterval(sendJoinRequest, 2000);
     
     timeoutId = setTimeout(() => {
+      clearInterval(intervalId);
       if (unsubscribe) unsubscribe();
       listenerChannel.release();
       setJoinError("Connection timeout. Is the server running?");
